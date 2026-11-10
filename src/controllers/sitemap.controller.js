@@ -32,25 +32,26 @@ export async function generateSitemap(req, res, next) {
         // Static routes with default priorities and frequencies
         const staticRoutes = [
             { path: '/', priority: '1.0', changefreq: 'daily' },
+            { path: '/solutions', priority: '0.9', changefreq: 'weekly' },
             { path: '/products', priority: '0.9', changefreq: 'weekly' },
-            { path: '/services', priority: '0.8', changefreq: 'weekly' },
+            { path: '/projects', priority: '0.8', changefreq: 'weekly' },
+            { path: '/applications', priority: '0.8', changefreq: 'monthly' },
             { path: '/about', priority: '0.8', changefreq: 'monthly' },
             { path: '/contact-us', priority: '0.8', changefreq: 'monthly' },
             { path: '/blogs', priority: '0.8', changefreq: 'weekly' },
             { path: '/faqs', priority: '0.7', changefreq: 'monthly' },
-            { path: '/catalogues', priority: '0.7', changefreq: 'monthly' },
-            { path: '/industries', priority: '0.7', changefreq: 'monthly' },
             { path: '/downloads', priority: '0.6', changefreq: 'monthly' },
             { path: '/privacy-policy', priority: '0.3', changefreq: 'yearly' },
             { path: '/terms-and-conditions', priority: '0.3', changefreq: 'yearly' }
         ];
 
         // Fetch active dynamic entries
-        const [productsRes, categoriesRes, servicesRes, blogsRes] = await Promise.all([
+        const [productsRes, categoriesRes, solutionsRes, blogsRes, projectsRes] = await Promise.all([
             query(`SELECT slug, updated_at, created_at FROM public."products" WHERE status = 1`),
             query(`SELECT slug, updated_at, created_at FROM public."categories" WHERE status = 1`),
-            query(`SELECT slug, updated_at, created_at FROM public."services" WHERE status = 1`),
-            query(`SELECT slug, updated_at, created_at FROM public."blogs" WHERE status = 1`)
+            query(`SELECT slug, updated_at, created_at FROM public."solutions" WHERE status = 1`),
+            query(`SELECT slug, updated_at, created_at FROM public."blogs" WHERE status = 1`),
+            query(`SELECT slug, updated_at, created_at FROM public."projects" WHERE status = 1`)
         ]);
 
         const today = formatDate(new Date());
@@ -94,19 +95,31 @@ export async function generateSitemap(req, res, next) {
             xml += `  </url>\n`;
         }
 
-        // 4. Active Services
-        for (const srv of servicesRes.rows) {
-            if (!srv.slug) continue;
-            const lastmod = formatDate(srv.updated_at || srv.created_at);
+        // 4. Active Solutions
+        for (const s of solutionsRes.rows) {
+            if (!s.slug) continue;
+            const lastmod = formatDate(s.updated_at || s.created_at);
             xml += `  <url>\n`;
-            xml += `    <loc>${escapeXml(`${siteUrl}/services/${encodeURIComponent(srv.slug)}`)}</loc>\n`;
+            xml += `    <loc>${escapeXml(`${siteUrl}/solutions/${encodeURIComponent(s.slug)}`)}</loc>\n`;
             xml += `    <lastmod>${lastmod}</lastmod>\n`;
             xml += `    <changefreq>monthly</changefreq>\n`;
             xml += `    <priority>0.8</priority>\n`;
             xml += `  </url>\n`;
         }
 
-        // 5. Active Blogs
+        // 5. Active Projects
+        for (const p of projectsRes.rows) {
+            if (!p.slug) continue;
+            const lastmod = formatDate(p.updated_at || p.created_at);
+            xml += `  <url>\n`;
+            xml += `    <loc>${escapeXml(`${siteUrl}/projects/${encodeURIComponent(p.slug)}`)}</loc>\n`;
+            xml += `    <lastmod>${lastmod}</lastmod>\n`;
+            xml += `    <changefreq>monthly</changefreq>\n`;
+            xml += `    <priority>0.8</priority>\n`;
+            xml += `  </url>\n`;
+        }
+
+        // 6. Active Blogs
         for (const blog of blogsRes.rows) {
             if (!blog.slug) continue;
             const lastmod = formatDate(blog.updated_at || blog.created_at);

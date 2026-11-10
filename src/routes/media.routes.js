@@ -7,10 +7,13 @@ const FOLDERS_TO_SEARCH = [
   'categories',
   'products',
   'banners',
-  'services',
+  'solutions',
+  'projects',
+  'applications',
   'blogs',
   'features',
-  'pages'
+  'pages',
+  'downloads'
 ];
 
 const MIME_MAP = {

@@ -80,6 +80,11 @@ export async function listProducts(req, res, next) {
             raw_benefit_image: p.benefit_image,
             catalogue: p.catalogue ? getPdfUrl(p.catalogue) : null,
             raw_catalogue: p.catalogue,
+            datasheet: p.datasheet ? getPdfUrl(p.datasheet) : null,
+            raw_datasheet: p.datasheet,
+            capacity: p.capacity || null,
+            power: p.power || null,
+            specifications: p.specifications ? (typeof p.specifications === 'string' ? JSON.parse(p.specifications) : p.specifications) : null,
             description: p.description,
             feature_and_benefit: p.feature_and_benefit,
             benefit_description: p.benefit_description,
@@ -127,6 +132,8 @@ export async function getProduct(req, res, next) {
                 image_url: p.image ? getImageUrl(p.image, 'products') : null,
                 benefit_image_url: p.benefit_image ? getImageUrl(p.benefit_image, 'products') : null,
                 catalogue_url: p.catalogue ? getPdfUrl(p.catalogue) : null,
+                datasheet_url: p.datasheet ? getPdfUrl(p.datasheet) : null,
+                specifications: p.specifications ? (typeof p.specifications === 'string' ? JSON.parse(p.specifications) : p.specifications) : null,
                 additionals: parseAdditionals(p.additionals)
             }
         });
@@ -159,6 +166,7 @@ export async function createProduct(req, res, next) {
         let mainImage = body.image || null;
         let benefitImage = body.benefit_image || null;
         let cataloguePdf = body.catalogue || null;
+        let datasheetPdf = body.datasheet || null;
 
         // Process uploaded files if available
         if (req.files) {
@@ -170,6 +178,9 @@ export async function createProduct(req, res, next) {
             }
             if (req.files.catalogue && req.files.catalogue[0]) {
                 cataloguePdf = await uploadFileToSupabase(req.files.catalogue[0]);
+            }
+            if (req.files.datasheet && req.files.datasheet[0]) {
+                datasheetPdf = await uploadFileToSupabase(req.files.datasheet[0]);
             }
         }
 
@@ -188,21 +199,37 @@ export async function createProduct(req, res, next) {
             }
         }
 
+        let specificationsString = null;
+        if (body.specifications) {
+            if (typeof body.specifications === 'string') {
+                try {
+                    const parsed = JSON.parse(body.specifications);
+                    specificationsString = JSON.stringify(parsed);
+                } catch (e) {
+                    specificationsString = body.specifications;
+                }
+            } else {
+                specificationsString = JSON.stringify(body.specifications);
+            }
+        }
+
         const categoryId = body.category_id ? parseInt(body.category_id) : null;
 
         const { rows: inserted } = await query(
             `INSERT INTO public.products (
                 slug, user_id, category_id, title, description,
                 feature_and_benefit, benefit_description, benefit_image,
-                additionals, catalogue, image, status,
+                additionals, specifications, capacity, power, datasheet,
+                catalogue, image, status,
                 seo_title, seo_description, seo_keywords,
                 "order", created_at, updated_at
             ) VALUES (
                 $1, $2, $3, $4, $5,
                 $6, $7, $8,
-                $9, $10, $11, $12,
-                $13, $14, $15,
-                $16, NOW(), NOW()
+                $9, $10, $11, $12, $13,
+                $14, $15, $16,
+                $17, $18, $19,
+                $20, NOW(), NOW()
             ) RETURNING *`,
             [
                 productSlug,
@@ -214,6 +241,10 @@ export async function createProduct(req, res, next) {
                 body.benefit_description || null,
                 benefitImage,
                 additionalsString,
+                specificationsString,
+                body.capacity || null,
+                body.power || null,
+                datasheetPdf,
                 cataloguePdf,
                 mainImage,
                 body.status !== undefined ? parseInt(body.status) : 1,
@@ -251,6 +282,7 @@ export async function updateProduct(req, res, next) {
         let mainImage = prev.image;
         let benefitImage = prev.benefit_image;
         let cataloguePdf = prev.catalogue;
+        let datasheetPdf = prev.datasheet;
 
         if (req.files) {
             if (req.files.image && req.files.image[0]) {
@@ -261,6 +293,9 @@ export async function updateProduct(req, res, next) {
             }
             if (req.files.catalogue && req.files.catalogue[0]) {
                 cataloguePdf = await uploadFileToSupabase(req.files.catalogue[0]);
+            }
+            if (req.files.datasheet && req.files.datasheet[0]) {
+                datasheetPdf = await uploadFileToSupabase(req.files.datasheet[0]);
             }
         }
 
@@ -286,6 +321,15 @@ export async function updateProduct(req, res, next) {
             }
         }
 
+        let specificationsString = prev.specifications;
+        if (body.specifications !== undefined) {
+            if (typeof body.specifications === 'string') {
+                specificationsString = body.specifications;
+            } else {
+                specificationsString = JSON.stringify(body.specifications);
+            }
+        }
+
         const categoryId = body.category_id !== undefined ? (body.category_id ? parseInt(body.category_id) : null) : prev.category_id;
 
         const { rows: updated } = await query(
@@ -298,15 +342,19 @@ export async function updateProduct(req, res, next) {
                 benefit_description = $6,
                 benefit_image = $7,
                 additionals = $8,
-                catalogue = $9,
-                image = $10,
-                status = $11,
-                seo_title = $12,
-                seo_description = $13,
-                seo_keywords = $14,
-                "order" = $15,
+                specifications = $9,
+                capacity = $10,
+                power = $11,
+                datasheet = $12,
+                catalogue = $13,
+                image = $14,
+                status = $15,
+                seo_title = $16,
+                seo_description = $17,
+                seo_keywords = $18,
+                "order" = $19,
                 updated_at = NOW()
-            WHERE id = $16
+            WHERE id = $20
             RETURNING *`,
             [
                 title,
@@ -317,6 +365,10 @@ export async function updateProduct(req, res, next) {
                 body.benefit_description !== undefined ? body.benefit_description : prev.benefit_description,
                 benefitImage,
                 additionalsString,
+                specificationsString,
+                body.capacity !== undefined ? body.capacity : prev.capacity,
+                body.power !== undefined ? body.power : prev.power,
+                datasheetPdf,
                 cataloguePdf,
                 mainImage,
                 body.status !== undefined ? parseInt(body.status) : prev.status,

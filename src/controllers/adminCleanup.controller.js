@@ -26,21 +26,37 @@ const CLEANABLE_ENTITIES = {
         searchCols: ['title', 'slug', 'summary', 'description'],
         type: 'content'
     },
-    services: {
-        table: 'services',
-        label: 'Services & Capabilities',
+    solutions: {
+        table: 'solutions',
+        label: 'Engineering Solutions',
         titleCol: 'title',
         subCol: 'summary',
         searchCols: ['title', 'slug', 'summary', 'description'],
         type: 'content'
     },
-    industries: {
-        table: 'industries',
-        label: 'Industry Sectors',
+    applications: {
+        table: 'applications',
+        label: 'Applications & Sectors',
         titleCol: 'title',
         subCol: 'description',
         searchCols: ['title', 'slug', 'description'],
         type: 'content'
+    },
+    projects: {
+        table: 'projects',
+        label: 'Featured Projects',
+        titleCol: 'title',
+        subCol: 'location',
+        searchCols: ['title', 'slug', 'location', 'project_type', 'description'],
+        type: 'content'
+    },
+    downloads: {
+        table: 'downloads',
+        label: 'Downloads & Catalogues',
+        titleCol: 'title',
+        subCol: 'type',
+        searchCols: ['title', 'slug', 'type', 'category'],
+        type: 'media'
     },
 
     banners: {
@@ -75,12 +91,12 @@ const CLEANABLE_ENTITIES = {
         searchCols: ['question', 'answer', 'name', 'email'],
         type: 'content'
     },
-    contact_forms: {
-        table: 'contact_forms',
-        label: 'Customer Inquiries (Contact)',
+    enquiries: {
+        table: 'enquiries',
+        label: 'Customer Enquiries & Leads',
         titleCol: 'name',
         subCol: 'email',
-        searchCols: ['name', 'email', 'subject', 'message', 'phone_number'],
+        searchCols: ['name', 'email', 'phone', 'message', 'city', 'interest'],
         type: 'leads'
     },
 

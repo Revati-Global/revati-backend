@@ -53,3 +53,6 @@ export async function adminAuthMiddleware(req, res, next) {
         next(err);
     }
 }
+
+export const adminAuth = adminAuthMiddleware;
+export default adminAuthMiddleware;

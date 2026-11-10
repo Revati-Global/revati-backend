@@ -8,7 +8,7 @@ import { supabase, BUCKET_NAME } from '../config/supabase.js';
  * PDFs and SVGs are stored with clean UUID filenames.
  *
  * @param {Express.Multer.File} file - Multer in-memory file
- * @param {string} folder - Target bucket folder (e.g. 'categories', 'products', 'banners', 'services', etc.)
+ * @param {string} folder - Target bucket folder (e.g. 'categories', 'products', 'banners', 'solutions', etc.)
  * @returns {Promise<string>} Uploaded unique filename
  */
 export async function uploadAndOptimizeMedia(file, folder = 'misc') {

@@ -35,6 +35,8 @@ export const upload = multer({
     }
 });
 
+export const uploadSingle = (fieldName) => upload.single(fieldName);
+
 // Resume upload filter with strict MIME & extension verification
 const ALLOWED_RESUME_EXTS = ['.docx', '.pdf', '.doc'];
 const ALLOWED_RESUME_MIMES = [

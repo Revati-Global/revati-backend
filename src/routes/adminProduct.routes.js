@@ -18,7 +18,8 @@ router.use(adminAuthMiddleware);
 const productUpload = upload.fields([
     { name: 'image', maxCount: 1 },
     { name: 'benefit_image', maxCount: 1 },
-    { name: 'catalogue', maxCount: 1 }
+    { name: 'catalogue', maxCount: 1 },
+    { name: 'datasheet', maxCount: 1 }
 ]);
 
 router.get('/', listProducts);

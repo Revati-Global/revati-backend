@@ -1,51 +1,32 @@
 # Revati Global - Backend API (`revati-backend`)
 
-REST API service for Revati Global built with Node.js, Express, PostgreSQL, and Supabase Storage.
+Production Node.js / Express REST API service for Revati Global, optimized for Vercel Serverless (`bom1` region) and Supabase PostgreSQL with direct client storage uploads.
 
-## Features
-- Modular MVC architecture with Express routes and controllers.
-- Supabase PostgreSQL database connectivity via connection pool.
-- Secure media and document proxy for Supabase Storage (`revati-media` bucket).
-- JWT authentication for admin endpoints.
-- Strict CORS configuration for Revati Global domains and local development.
-- Public sitemap generator.
+## Key Features
+- **Vercel Serverless Ready:** Clean app export in `api/index.js` with `bom1` (Mumbai) region routing.
+- **Database Architecture:** 23 PostgreSQL tables with Row Level Security (RLS), Supabase transaction pooler (port 6543, `max: 1` per serverless instance).
+- **Direct Signed Uploads:** Browser uploads directly to Supabase Storage via signed tokens, bypassing Vercel 4.5 MB body limit and eliminating serverless memory bloat.
+- **Egress Protection:** Direct Supabase CDN public URLs; legacy media routes redirect with HTTP 301; automated orphan cleanup on asset update/deletion.
+- **Strict RBAC:** Role-based access control with live DB role checks: `super admin`, `admin`, `editor`, and `sales`.
+- **Atomic Rate Limiter:** PostgreSQL-backed atomic rate limiter on `rate_limits` table.
+- **Transactional Email:** Resend HTTP integration for instant company alerts and customer confirmation emails.
+- **Form Spam Protection:** Honeypot verification, submission timing checks, and optional Cloudflare Turnstile token validation.
+- **Unit Test Suite:** 15 automated Node.js unit tests (`npm test`) covering CORS, RBAC, upload presets, URL sanitizers, and RFQ validators.
 
 ## Getting Started
 
-### Prerequisites
-- Node.js (v18+)
-- npm
-
-### Installation
+### Installation & Testing
 ```bash
 npm install
+npm test
 ```
 
-### Configuration
-Copy `.env.example` to `.env` and fill in the required variables:
+### Initial Admin Setup
 ```bash
-cp .env.example .env
+node scripts/create-admin.js
 ```
 
-#### Required Environment Variables (Names Only)
-- `PORT` - Port number for Express server
-- `NODE_ENV` - Application environment (`development` / `production`)
-- `APP_URL` - Backend public base URL
-- `SITE_URL` - Public website domain URL
-- `CORS_ORIGIN` - Comma-separated allowed frontend origins
-- `API_KEY` - Client API key for public endpoints
-- `SUPABASE_URL` - Supabase project URL
-- `SUPABASE_ANON_KEY` - Supabase anon/public key
-- `SUPABASE_SERVICE_ROLE_KEY` - Supabase service role key (storage operations)
-- `DATABASE_URL` - PostgreSQL database connection string
-- `JWT_SECRET` - Secret key for admin session tokens
-
-### Running the Application
+### Development Server
 ```bash
-# Development mode with watch
 npm run dev
-
-# Production start
-npm start
 ```
-

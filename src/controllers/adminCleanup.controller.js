@@ -174,7 +174,7 @@ export async function searchCleanupData(req, res, next) {
     try {
         const { q = '', table = 'all', limit = 100, offset = 0 } = req.query;
         const searchTerm = (q || '').trim();
-        const targetTables = table === 'all' 
+        const targetTables = table === 'all'
             ? Object.keys(CLEANABLE_ENTITIES)
             : [table].filter(t => CLEANABLE_ENTITIES[t]);
 
@@ -336,7 +336,7 @@ export async function scanOrphanFiles(req, res, next) {
                         }
                     }
                 }
-            } catch {}
+            } catch { }
         }
 
         // Also check settings table for logo
@@ -346,7 +346,7 @@ export async function scanOrphanFiles(req, res, next) {
                 const p = cleanStoragePath(rows[0].value);
                 if (p) dbReferences.add(p.toLowerCase());
             }
-        } catch {}
+        } catch { }
 
         // 2. Scan bucket folders
         const folders = ['branding', 'avatars', 'thumbnails', 'products', 'projects', 'blogs', 'banners', 'icons', 'downloads', 'solutions', 'applications', 'categories', 'misc'];
@@ -372,7 +372,7 @@ export async function scanOrphanFiles(req, res, next) {
                         }
                     }
                 }
-            } catch {}
+            } catch { }
         }
 
         return res.json({

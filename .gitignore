@@ -5,3 +5,7 @@ node_modules
 dist
 .vercel
 .DS_Store
+public/frontend/
+public/uploads/
+scripts/inspect-dump.js
+scripts/test-parser.js

@@ -11,7 +11,7 @@ export async function getCategories(req, res, next) {
             `SELECT * FROM public."categories" WHERE status = 1 ORDER BY "order" ASC, "id" ASC`
         );
 
-        const rootCategories = allCategories.filter(c => c.parent_category === null);
+        const rootCategories = allCategories.filter(c => c.parent_id == null && c.parent_category == null);
         const serialized = serializeCategoryTree(rootCategories, allCategories);
 
         return res.json({
@@ -40,10 +40,10 @@ export async function getCategoryBySlug(req, res, next) {
         }
 
         // Get subcategory IDs and their children IDs
-        const subcategories = allCategories.filter(c => c.parent_category === category.id);
+        const subcategories = allCategories.filter(c => (c.parent_id === category.id || c.parent_category === category.id));
         const subcategoryIds = subcategories.map(c => c.id);
 
-        const childCategories = allCategories.filter(c => subcategoryIds.includes(c.parent_category));
+        const childCategories = allCategories.filter(c => subcategoryIds.includes(c.parent_id) || subcategoryIds.includes(c.parent_category));
         const childCategoryIds = childCategories.map(c => c.id);
 
         const allTargetCategoryIds = [category.id, ...subcategoryIds, ...childCategoryIds];

@@ -247,3 +247,4 @@ export async function toggleApplicationStatus(req, res, next) {
         next(err);
     }
 }
+

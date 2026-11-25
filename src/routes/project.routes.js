@@ -10,3 +10,4 @@ router.get('/', getProjects);
 router.get('/:project', getProjectBySlug);
 
 export default router;
+

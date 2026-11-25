@@ -22,3 +22,4 @@ router.delete('/:id', deleteApplication);
 router.patch('/:id/toggle-status', toggleApplicationStatus);
 
 export default router;
+

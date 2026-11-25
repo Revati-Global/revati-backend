@@ -22,3 +22,4 @@ router.delete('/:id', deleteDownload);
 router.patch('/:id/toggle-status', toggleDownloadStatus);
 
 export default router;
+

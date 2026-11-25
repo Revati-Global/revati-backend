@@ -22,3 +22,4 @@ router.delete('/:id', deleteProject);
 router.patch('/:id/toggle-status', toggleProjectStatus);
 
 export default router;
+

@@ -288,3 +288,4 @@ export async function toggleProjectStatus(req, res, next) {
         next(err);
     }
 }
+

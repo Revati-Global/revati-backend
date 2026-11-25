@@ -10,3 +10,4 @@ router.get('/', getSolutions);
 router.get('/:solution', getSolutionBySlug);
 
 export default router;
+

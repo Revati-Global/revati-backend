@@ -22,3 +22,4 @@ router.delete('/:id', deleteSolution);
 router.patch('/:id/toggle-status', toggleSolutionStatus);
 
 export default router;
+

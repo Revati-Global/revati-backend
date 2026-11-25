@@ -47,3 +47,4 @@ export async function getApplicationBySlug(req, res, next) {
         next(err);
     }
 }
+

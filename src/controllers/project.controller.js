@@ -55,3 +55,4 @@ export async function getProjectBySlug(req, res, next) {
         next(err);
     }
 }
+

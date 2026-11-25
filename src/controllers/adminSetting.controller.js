@@ -49,3 +49,4 @@ export async function updateSettings(req, res, next) {
         next(err);
     }
 }
+

@@ -14,3 +14,4 @@ export async function getPublicSettings(req, res, next) {
         next(err);
     }
 }
+

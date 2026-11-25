@@ -10,3 +10,4 @@ router.get('/', getApplications);
 router.get('/:application', getApplicationBySlug);
 
 export default router;
+

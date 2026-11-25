@@ -448,3 +448,4 @@ INSERT INTO public."settings" ("key", "value", "group", "description") VALUES
   ('logo', 'logo-full.png', 'branding', 'Header brand logo path'),
   ('tagline', 'Modern Engineering. Reliable Solutions.', 'branding', 'Company brand tagline')
 ON CONFLICT ("key") DO NOTHING;
+

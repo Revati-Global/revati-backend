@@ -98,6 +98,9 @@ export function cleanStoragePath(pathOrUrl) {
 export function getPublicStorageUrl(pathOrUrl, fallbackFolder = 'misc') {
     if (!pathOrUrl) return '';
     if (typeof pathOrUrl !== 'string') return '';
+    if (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://') || pathOrUrl.startsWith('/images/') || pathOrUrl.startsWith('/brand/')) {
+        return pathOrUrl;
+    }
 
     const clean = cleanStoragePath(pathOrUrl);
     if (!clean) return '';

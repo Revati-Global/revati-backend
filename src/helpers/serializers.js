@@ -2,6 +2,10 @@ import { getPublicStorageUrl } from './storage.js';
 
 export function getImageUrl(image, folder = 'categories') {
     if (!image) return null;
+    if (typeof image !== 'string') return null;
+    if (image.startsWith('http://') || image.startsWith('https://') || image.startsWith('/images/') || image.startsWith('/brand/')) {
+        return image;
+    }
     return getPublicStorageUrl(image, folder);
 }
 

@@ -11,7 +11,7 @@ async function startServer() {
         console.log('Successfully connected to Supabase PostgreSQL database.');
         client.release();
 
-        app.listen(PORT, () => {
+        app.listen(PORT, '0.0.0.0', () => {
             console.log(`Revati Global API Server is running on port ${PORT}`);
             console.log(`Environment: ${config.nodeEnv}`);
             console.log(`API Base URL: http://localhost:${PORT}/api`);

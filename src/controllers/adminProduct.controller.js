@@ -1,8 +1,6 @@
-import { uploadAndOptimizeMedia } from '../helpers/mediaOptimizer.js';
 import { query } from '../config/db.js';
-import { supabase, BUCKET_NAME } from '../config/supabase.js';
 import { getImageUrl, getPdfUrl } from '../helpers/serializers.js';
-import { randomUUID } from 'crypto';
+import { removeStorageFiles, cleanStoragePath } from '../helpers/storage.js';
 
 function slugify(text) {
     return text
@@ -14,25 +12,14 @@ function slugify(text) {
         .replace(/\-\-+/g, '-');
 }
 
-function parseAdditionals(additionalsJson) {
-    if (!additionalsJson) return [];
+function parseJsonSafe(val, fallback = null) {
+    if (!val) return fallback;
+    if (typeof val === 'object') return val;
     try {
-        const parsed = typeof additionalsJson === 'string' ? JSON.parse(additionalsJson) : additionalsJson;
-        if (!Array.isArray(parsed)) return [];
-        return parsed.map(item => ({
-            title: item.title || '',
-            description: item.description || '',
-            image: item.image ? getImageUrl(item.image, 'products') : '',
-            raw_image: item.image || ''
-        }));
-    } catch (e) {
-        return [];
+        return JSON.parse(val);
+    } catch {
+        return fallback;
     }
-}
-
-async function uploadFileToSupabase(file, folder = 'media') {
-    if (!file) return null;
-    return await uploadAndOptimizeMedia(file, folder);
 }
 
 export async function listProducts(req, res, next) {
@@ -54,16 +41,16 @@ export async function listProducts(req, res, next) {
         }
 
         if (category_id && category_id !== 'all') {
-            params.push(parseInt(category_id));
+            params.push(parseInt(category_id, 10));
             sql += ` AND p.category_id = $${params.length}`;
         }
 
-        if (status !== undefined && status !== 'all') {
-            params.push(parseInt(status));
+        if (status && status !== 'all') {
+            params.push(parseInt(status, 10));
             sql += ` AND p.status = $${params.length}`;
         }
 
-        sql += ` ORDER BY COALESCE(p."order", 9999) ASC, p.id ASC`;
+        sql += ` ORDER BY COALESCE(p."order", 9999) ASC, p.id DESC`;
 
         const { rows: products } = await query(sql, params);
 
@@ -74,26 +61,26 @@ export async function listProducts(req, res, next) {
             category_id: p.category_id,
             category_title: p.category_title || null,
             category_slug: p.category_slug || null,
+            description: p.description,
+            feature_and_benefit: p.feature_and_benefit,
+            benefit_description: p.benefit_description,
+            specifications: parseJsonSafe(p.specifications, {}),
+            additionals: parseJsonSafe(p.additionals, []),
+            capacity: p.capacity,
+            power: p.power,
+            datasheet: p.datasheet ? getPdfUrl(p.datasheet, 'downloads') : null,
+            raw_datasheet: p.datasheet,
+            catalogue: p.catalogue ? getPdfUrl(p.catalogue, 'downloads') : null,
+            raw_catalogue: p.catalogue,
             image: p.image ? getImageUrl(p.image, 'products') : null,
             raw_image: p.image,
             benefit_image: p.benefit_image ? getImageUrl(p.benefit_image, 'products') : null,
             raw_benefit_image: p.benefit_image,
-            catalogue: p.catalogue ? getPdfUrl(p.catalogue) : null,
-            raw_catalogue: p.catalogue,
-            datasheet: p.datasheet ? getPdfUrl(p.datasheet) : null,
-            raw_datasheet: p.datasheet,
-            capacity: p.capacity || null,
-            power: p.power || null,
-            specifications: p.specifications ? (typeof p.specifications === 'string' ? JSON.parse(p.specifications) : p.specifications) : null,
-            description: p.description,
-            feature_and_benefit: p.feature_and_benefit,
-            benefit_description: p.benefit_description,
-            additionals: parseAdditionals(p.additionals),
             status: p.status ?? 1,
             order: p.order ?? 0,
             seo_title: p.seo_title,
+            seo_keyword: p.seo_keyword || p.seo_keywords,
             seo_description: p.seo_description,
-            seo_keywords: p.seo_keywords,
             created_at: p.created_at,
             updated_at: p.updated_at
         }));
@@ -111,11 +98,9 @@ export async function getProduct(req, res, next) {
     try {
         const { id } = req.params;
         const { rows: products } = await query(
-            `SELECT p.*, 
-                    c.title as category_title,
-                    c.slug as category_slug
-             FROM public.products p
-             LEFT JOIN public.categories c ON c.id = p.category_id
+            `SELECT p.*, c.title as category_title, c.slug as category_slug 
+             FROM public.products p 
+             LEFT JOIN public.categories c ON c.id = p.category_id 
              WHERE p.id = $1 LIMIT 1`,
             [id]
         );
@@ -131,10 +116,10 @@ export async function getProduct(req, res, next) {
                 ...p,
                 image_url: p.image ? getImageUrl(p.image, 'products') : null,
                 benefit_image_url: p.benefit_image ? getImageUrl(p.benefit_image, 'products') : null,
-                catalogue_url: p.catalogue ? getPdfUrl(p.catalogue) : null,
-                datasheet_url: p.datasheet ? getPdfUrl(p.datasheet) : null,
-                specifications: p.specifications ? (typeof p.specifications === 'string' ? JSON.parse(p.specifications) : p.specifications) : null,
-                additionals: parseAdditionals(p.additionals)
+                datasheet_url: p.datasheet ? getPdfUrl(p.datasheet, 'downloads') : null,
+                catalogue_url: p.catalogue ? getPdfUrl(p.catalogue, 'downloads') : null,
+                specifications: parseJsonSafe(p.specifications, {}),
+                additionals: parseJsonSafe(p.additionals, [])
             }
         });
     } catch (err) {
@@ -146,119 +131,77 @@ export async function createProduct(req, res, next) {
     try {
         const body = req.body || {};
         if (!body.title || body.title.trim() === '') {
-            return res.status(400).json({
-                result: 'error',
-                message: 'Product title is required'
-            });
+            return res.status(400).json({ result: 'error', message: 'Product title is required' });
         }
 
-        let productSlug = body.slug ? slugify(body.slug) : slugify(body.title);
-        
-        // Ensure slug uniqueness
+        let slug = body.slug ? slugify(body.slug) : slugify(body.title);
+
         const { rows: existingSlug } = await query(
             `SELECT id FROM public.products WHERE slug = $1 LIMIT 1`,
-            [productSlug]
+            [slug]
         );
         if (existingSlug.length > 0) {
-            productSlug = `${productSlug}-${Date.now()}`;
+            slug = `${slug}-${Date.now()}`;
         }
 
-        let mainImage = body.image || null;
-        let benefitImage = body.benefit_image || null;
-        let cataloguePdf = body.catalogue || null;
-        let datasheetPdf = body.datasheet || null;
+        const imagePath = cleanStoragePath(body.image);
+        const benefitImagePath = cleanStoragePath(body.benefit_image);
+        const datasheetPath = cleanStoragePath(body.datasheet);
+        const cataloguePath = cleanStoragePath(body.catalogue);
 
-        // Process uploaded files if available
-        if (req.files) {
-            if (req.files.image && req.files.image[0]) {
-                mainImage = await uploadFileToSupabase(req.files.image[0]);
-            }
-            if (req.files.benefit_image && req.files.benefit_image[0]) {
-                benefitImage = await uploadFileToSupabase(req.files.benefit_image[0]);
-            }
-            if (req.files.catalogue && req.files.catalogue[0]) {
-                cataloguePdf = await uploadFileToSupabase(req.files.catalogue[0]);
-            }
-            if (req.files.datasheet && req.files.datasheet[0]) {
-                datasheetPdf = await uploadFileToSupabase(req.files.datasheet[0]);
-            }
-        }
+        const categoryId = body.category_id && body.category_id !== '0' && body.category_id !== '' 
+            ? parseInt(body.category_id, 10) 
+            : null;
 
-        // Format additionals JSON
-        let additionalsString = '[]';
-        if (body.additionals) {
-            if (typeof body.additionals === 'string') {
-                try {
-                    const parsed = JSON.parse(body.additionals);
-                    additionalsString = JSON.stringify(parsed);
-                } catch (e) {
-                    additionalsString = body.additionals;
-                }
-            } else if (Array.isArray(body.additionals)) {
-                additionalsString = JSON.stringify(body.additionals);
-            }
-        }
+        const specs = parseJsonSafe(body.specifications, null);
+        const additionals = parseJsonSafe(body.additionals, null);
 
-        let specificationsString = null;
-        if (body.specifications) {
-            if (typeof body.specifications === 'string') {
-                try {
-                    const parsed = JSON.parse(body.specifications);
-                    specificationsString = JSON.stringify(parsed);
-                } catch (e) {
-                    specificationsString = body.specifications;
-                }
-            } else {
-                specificationsString = JSON.stringify(body.specifications);
-            }
-        }
-
-        const categoryId = body.category_id ? parseInt(body.category_id) : null;
-
-        const { rows: inserted } = await query(
-            `INSERT INTO public.products (
+        const insertSql = `
+            INSERT INTO public.products (
                 slug, user_id, category_id, title, description,
                 feature_and_benefit, benefit_description, benefit_image,
-                additionals, specifications, capacity, power, datasheet,
-                catalogue, image, status,
-                seo_title, seo_description, seo_keywords,
-                "order", created_at, updated_at
+                specifications, additionals, capacity, power,
+                datasheet, catalogue, image, status, "order",
+                seo_title, seo_description, seo_keyword, seo_keywords,
+                created_at, updated_at
             ) VALUES (
                 $1, $2, $3, $4, $5,
                 $6, $7, $8,
-                $9, $10, $11, $12, $13,
-                $14, $15, $16,
-                $17, $18, $19,
-                $20, NOW(), NOW()
-            ) RETURNING *`,
-            [
-                productSlug,
-                req.user?.id ? parseInt(req.user.id) : 1,
-                categoryId,
-                body.title.trim(),
-                body.description || null,
-                body.feature_and_benefit || null,
-                body.benefit_description || null,
-                benefitImage,
-                additionalsString,
-                specificationsString,
-                body.capacity || null,
-                body.power || null,
-                datasheetPdf,
-                cataloguePdf,
-                mainImage,
-                body.status !== undefined ? parseInt(body.status) : 1,
-                body.seo_title || null,
-                body.seo_description || null,
-                body.seo_keywords || null,
-                body.order !== undefined ? parseInt(body.order) : 0
-            ]
-        );
+                $9, $10, $11, $12,
+                $13, $14, $15, $16, $17,
+                $18, $19, $20, $21,
+                NOW(), NOW()
+            ) RETURNING *;
+        `;
+
+        const { rows } = await query(insertSql, [
+            slug,
+            req.user?.id ? parseInt(req.user.id, 10) : 1,
+            categoryId,
+            body.title.trim(),
+            body.description || '',
+            body.feature_and_benefit || null,
+            body.benefit_description || null,
+            benefitImagePath,
+            specs ? JSON.stringify(specs) : null,
+            additionals ? JSON.stringify(additionals) : null,
+            body.capacity || null,
+            body.power || null,
+            datasheetPath,
+            cataloguePath,
+            imagePath,
+            body.status !== undefined ? parseInt(body.status, 10) : 1,
+            body.order !== undefined ? parseInt(body.order, 10) : 0,
+            body.seo_title || null,
+            body.seo_description || null,
+            body.seo_keyword || null,
+            body.seo_keyword || null
+        ]);
 
         return res.status(201).json({
             result: 'success',
             message: 'Product created successfully',
-            product: inserted[0]
+            product: rows[0]
         });
     } catch (err) {
         next(err);
@@ -270,70 +213,59 @@ export async function updateProduct(req, res, next) {
         const { id } = req.params;
         const body = req.body || {};
 
-        const { rows: existing } = await query(
-            `SELECT * FROM public.products WHERE id = $1 LIMIT 1`,
-            [id]
-        );
+        const { rows: existing } = await query(`SELECT * FROM public.products WHERE id = $1 LIMIT 1`, [id]);
         if (existing.length === 0) {
             return res.status(404).json({ result: 'error', message: 'Product not found' });
         }
-
         const prev = existing[0];
-        let mainImage = prev.image;
-        let benefitImage = prev.benefit_image;
-        let cataloguePdf = prev.catalogue;
-        let datasheetPdf = prev.datasheet;
 
-        if (req.files) {
-            if (req.files.image && req.files.image[0]) {
-                mainImage = await uploadFileToSupabase(req.files.image[0]);
-            }
-            if (req.files.benefit_image && req.files.benefit_image[0]) {
-                benefitImage = await uploadFileToSupabase(req.files.benefit_image[0]);
-            }
-            if (req.files.catalogue && req.files.catalogue[0]) {
-                cataloguePdf = await uploadFileToSupabase(req.files.catalogue[0]);
-            }
-            if (req.files.datasheet && req.files.datasheet[0]) {
-                datasheetPdf = await uploadFileToSupabase(req.files.datasheet[0]);
+        let imagePath = prev.image;
+        if (body.image !== undefined) {
+            imagePath = cleanStoragePath(body.image);
+            if (prev.image && imagePath !== prev.image) {
+                removeStorageFiles(prev.image).catch(() => {});
             }
         }
 
-        const title = body.title !== undefined ? body.title.trim() : prev.title;
+        let benefitImagePath = prev.benefit_image;
+        if (body.benefit_image !== undefined) {
+            benefitImagePath = cleanStoragePath(body.benefit_image);
+            if (prev.benefit_image && benefitImagePath !== prev.benefit_image) {
+                removeStorageFiles(prev.benefit_image).catch(() => {});
+            }
+        }
+
+        let datasheetPath = prev.datasheet;
+        if (body.datasheet !== undefined) {
+            datasheetPath = cleanStoragePath(body.datasheet);
+            if (prev.datasheet && datasheetPath !== prev.datasheet) {
+                removeStorageFiles(prev.datasheet).catch(() => {});
+            }
+        }
+
+        let cataloguePath = prev.catalogue;
+        if (body.catalogue !== undefined) {
+            cataloguePath = cleanStoragePath(body.catalogue);
+            if (prev.catalogue && cataloguePath !== prev.catalogue) {
+                removeStorageFiles(prev.catalogue).catch(() => {});
+            }
+        }
+
         let slug = body.slug !== undefined ? slugify(body.slug) : prev.slug;
-
         if (slug !== prev.slug) {
-            const { rows: slugCheck } = await query(
-                `SELECT id FROM public.products WHERE slug = $1 AND id != $2 LIMIT 1`,
-                [slug, id]
-            );
-            if (slugCheck.length > 0) {
-                slug = `${slug}-${Date.now()}`;
-            }
+            const { rows: slugCheck } = await query(`SELECT id FROM public.products WHERE slug = $1 AND id != $2 LIMIT 1`, [slug, id]);
+            if (slugCheck.length > 0) slug = `${slug}-${Date.now()}`;
         }
 
-        let additionalsString = prev.additionals;
-        if (body.additionals !== undefined) {
-            if (typeof body.additionals === 'string') {
-                additionalsString = body.additionals;
-            } else if (Array.isArray(body.additionals)) {
-                additionalsString = JSON.stringify(body.additionals);
-            }
-        }
+        const categoryId = body.category_id !== undefined
+            ? (body.category_id && body.category_id !== '0' && body.category_id !== '' ? parseInt(body.category_id, 10) : null)
+            : prev.category_id;
 
-        let specificationsString = prev.specifications;
-        if (body.specifications !== undefined) {
-            if (typeof body.specifications === 'string') {
-                specificationsString = body.specifications;
-            } else {
-                specificationsString = JSON.stringify(body.specifications);
-            }
-        }
+        const specs = body.specifications !== undefined ? parseJsonSafe(body.specifications, null) : parseJsonSafe(prev.specifications, null);
+        const additionals = body.additionals !== undefined ? parseJsonSafe(body.additionals, null) : parseJsonSafe(prev.additionals, null);
 
-        const categoryId = body.category_id !== undefined ? (body.category_id ? parseInt(body.category_id) : null) : prev.category_id;
-
-        const { rows: updated } = await query(
-            `UPDATE public.products SET
+        const updateSql = `
+            UPDATE public.products SET
                 title = $1,
                 slug = $2,
                 category_id = $3,
@@ -341,49 +273,52 @@ export async function updateProduct(req, res, next) {
                 feature_and_benefit = $5,
                 benefit_description = $6,
                 benefit_image = $7,
-                additionals = $8,
-                specifications = $9,
+                specifications = $8,
+                additionals = $9,
                 capacity = $10,
                 power = $11,
                 datasheet = $12,
                 catalogue = $13,
                 image = $14,
                 status = $15,
-                seo_title = $16,
-                seo_description = $17,
-                seo_keywords = $18,
-                "order" = $19,
+                "order" = $16,
+                seo_title = $17,
+                seo_description = $18,
+                seo_keyword = $19,
+                seo_keywords = $20,
                 updated_at = NOW()
-            WHERE id = $20
-            RETURNING *`,
-            [
-                title,
-                slug,
-                categoryId,
-                body.description !== undefined ? body.description : prev.description,
-                body.feature_and_benefit !== undefined ? body.feature_and_benefit : prev.feature_and_benefit,
-                body.benefit_description !== undefined ? body.benefit_description : prev.benefit_description,
-                benefitImage,
-                additionalsString,
-                specificationsString,
-                body.capacity !== undefined ? body.capacity : prev.capacity,
-                body.power !== undefined ? body.power : prev.power,
-                datasheetPdf,
-                cataloguePdf,
-                mainImage,
-                body.status !== undefined ? parseInt(body.status) : prev.status,
-                body.seo_title !== undefined ? body.seo_title : prev.seo_title,
-                body.seo_description !== undefined ? body.seo_description : prev.seo_description,
-                body.seo_keywords !== undefined ? body.seo_keywords : prev.seo_keywords,
-                body.order !== undefined ? parseInt(body.order) : prev.order,
-                id
-            ]
-        );
+            WHERE id = $21
+            RETURNING *;
+        `;
+
+        const { rows } = await query(updateSql, [
+            body.title !== undefined ? body.title.trim() : prev.title,
+            slug,
+            categoryId,
+            body.description !== undefined ? body.description : prev.description,
+            body.feature_and_benefit !== undefined ? body.feature_and_benefit : prev.feature_and_benefit,
+            body.benefit_description !== undefined ? body.benefit_description : prev.benefit_description,
+            benefitImagePath,
+            specs ? JSON.stringify(specs) : null,
+            additionals ? JSON.stringify(additionals) : null,
+            body.capacity !== undefined ? body.capacity : prev.capacity,
+            body.power !== undefined ? body.power : prev.power,
+            datasheetPath,
+            cataloguePath,
+            imagePath,
+            body.status !== undefined ? parseInt(body.status, 10) : prev.status,
+            body.order !== undefined ? parseInt(body.order, 10) : prev.order,
+            body.seo_title !== undefined ? body.seo_title : prev.seo_title,
+            body.seo_description !== undefined ? body.seo_description : prev.seo_description,
+            body.seo_keyword !== undefined ? body.seo_keyword : prev.seo_keyword,
+            body.seo_keyword !== undefined ? body.seo_keyword : prev.seo_keywords,
+            id
+        ]);
 
         return res.json({
             result: 'success',
             message: 'Product updated successfully',
-            product: updated[0]
+            product: rows[0]
         });
     } catch (err) {
         next(err);
@@ -393,26 +328,13 @@ export async function updateProduct(req, res, next) {
 export async function toggleProductStatus(req, res, next) {
     try {
         const { id } = req.params;
-        const { rows: products } = await query(
-            `SELECT id, status FROM public.products WHERE id = $1 LIMIT 1`,
-            [id]
-        );
+        const { rows } = await query(`SELECT id, status FROM public.products WHERE id = $1 LIMIT 1`, [id]);
+        if (rows.length === 0) return res.status(404).json({ result: 'error', message: 'Product not found' });
 
-        if (products.length === 0) {
-            return res.status(404).json({ result: 'error', message: 'Product not found' });
-        }
+        const newStatus = rows[0].status === 1 ? 0 : 1;
+        await query(`UPDATE public.products SET status = $1, updated_at = NOW() WHERE id = $2`, [newStatus, id]);
 
-        const newStatus = products[0].status === 1 ? 0 : 1;
-        await query(
-            `UPDATE public.products SET status = $1, updated_at = NOW() WHERE id = $2`,
-            [newStatus, id]
-        );
-
-        return res.json({
-            result: 'success',
-            message: `Product ${newStatus === 1 ? 'activated' : 'deactivated'} successfully`,
-            status: newStatus
-        });
+        return res.json({ result: 'success', status: newStatus });
     } catch (err) {
         next(err);
     }
@@ -421,35 +343,22 @@ export async function toggleProductStatus(req, res, next) {
 export async function deleteProduct(req, res, next) {
     try {
         const { id } = req.params;
+        const { rows } = await query(`SELECT image, benefit_image, datasheet, catalogue FROM public.products WHERE id = $1 LIMIT 1`, [id]);
 
-        const { rows: existing } = await query(
-            `SELECT image, benefit_image, catalogue FROM public.products WHERE id = $1 LIMIT 1`,
-            [id]
-        );
-
-        if (existing.length === 0) {
+        if (rows.length === 0) {
             return res.status(404).json({ result: 'error', message: 'Product not found' });
         }
 
-        const product = existing[0];
-        const filesToDelete = [product.image, product.benefit_image, product.catalogue]
-            .filter(Boolean)
-            .map(filename => `products/${filename}`);
-
-        if (filesToDelete.length > 0) {
-            try {
-                await supabase.storage.from(BUCKET_NAME).remove(filesToDelete);
-            } catch (storageErr) {
-                console.warn('Storage cleanup warning on product delete:', storageErr.message);
-            }
+        const p = rows[0];
+        // Clean up all related files from Supabase Storage
+        const filesToRemove = [p.image, p.benefit_image, p.datasheet, p.catalogue].filter(Boolean);
+        if (filesToRemove.length > 0) {
+            await removeStorageFiles(filesToRemove);
         }
 
         await query(`DELETE FROM public.products WHERE id = $1`, [id]);
 
-        return res.json({
-            result: 'success',
-            message: 'Product deleted successfully'
-        });
+        return res.json({ result: 'success', message: 'Product and associated storage assets deleted successfully' });
     } catch (err) {
         next(err);
     }

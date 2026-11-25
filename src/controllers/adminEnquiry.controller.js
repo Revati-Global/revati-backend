@@ -101,15 +101,15 @@ export async function deleteEnquiry(req, res, next) {
 export async function exportEnquiriesCsv(req, res, next) {
     try {
         const { rows: enquiries } = await query(
-            `SELECT id, name, email, phone, state, city, country, interest, project_type, message, status, source, created_at
+            `SELECT id, name, email, phone, state, city, country, interest, project_type, message, status, notify_status, source, created_at
              FROM public.enquiries ORDER BY created_at DESC`
         );
 
-        let csv = 'ID,Name,Email,Phone,State,City,Country,Interest,Project Type,Message,Status,Source,Date\n';
+        let csv = 'ID,Name,Email,Phone,State,City,Country,Interest,Project Type,Message,Status,Notify Status,Source,Date\n';
         for (const e of enquiries) {
             const dateStr = e.created_at ? new Date(e.created_at).toISOString() : '';
             const sanitize = (str) => `"${(str || '').replace(/"/g, '""')}"`;
-            csv += `${e.id},${sanitize(e.name)},${sanitize(e.email)},${sanitize(e.phone)},${sanitize(e.state)},${sanitize(e.city)},${sanitize(e.country)},${sanitize(e.interest)},${sanitize(e.project_type)},${sanitize(e.message)},${sanitize(e.status)},${sanitize(e.source)},"${dateStr}"\n`;
+            csv += `${e.id},${sanitize(e.name)},${sanitize(e.email)},${sanitize(e.phone)},${sanitize(e.state)},${sanitize(e.city)},${sanitize(e.country)},${sanitize(e.interest)},${sanitize(e.project_type)},${sanitize(e.message)},${sanitize(e.status)},${sanitize(e.notify_status)},${sanitize(e.source)},"${dateStr}"\n`;
         }
 
         res.setHeader('Content-Type', 'text/csv');
@@ -119,4 +119,3 @@ export async function exportEnquiriesCsv(req, res, next) {
         next(err);
     }
 }
-

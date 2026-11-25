@@ -1,7 +1,6 @@
-import { uploadAndOptimizeMedia } from '../helpers/mediaOptimizer.js';
 import { query } from '../config/db.js';
-import { supabase, BUCKET_NAME } from '../config/supabase.js';
 import { getImageUrl } from '../helpers/serializers.js';
+import { removeStorageFiles, cleanStoragePath } from '../helpers/storage.js';
 
 function slugify(text) {
     return text
@@ -25,7 +24,7 @@ export async function listProjects(req, res, next) {
         }
 
         if (status !== undefined && status !== 'all') {
-            params.push(parseInt(status));
+            params.push(parseInt(status, 10));
             sql += ` AND status = $${params.length}`;
         }
 
@@ -66,21 +65,16 @@ export async function listProjects(req, res, next) {
 export async function getProject(req, res, next) {
     try {
         const { id } = req.params;
-        const { rows: projects } = await query(
-            `SELECT * FROM public.projects WHERE id = $1 LIMIT 1`,
-            [id]
-        );
+        const { rows } = await query(`SELECT * FROM public.projects WHERE id = $1 LIMIT 1`, [id]);
+        if (rows.length === 0) return res.status(404).json({ result: 'error', message: 'Project not found' });
 
-        if (projects.length === 0) {
-            return res.status(404).json({ result: 'error', message: 'Project not found' });
-        }
-
-        const p = projects[0];
+        const p = rows[0];
         return res.json({
             result: 'success',
             project: {
                 ...p,
-                image_url: p.image ? getImageUrl(p.image, 'projects') : null
+                image_url: p.image ? getImageUrl(p.image, 'projects') : null,
+                images: p.images ? (typeof p.images === 'string' ? JSON.parse(p.images) : p.images) : []
             }
         });
     } catch (err) {
@@ -96,57 +90,46 @@ export async function createProject(req, res, next) {
         }
 
         let slug = body.slug ? slugify(body.slug) : slugify(body.title);
-        const { rows: existingSlug } = await query(
-            `SELECT id FROM public.projects WHERE slug = $1 LIMIT 1`,
-            [slug]
-        );
-        if (existingSlug.length > 0) {
-            slug = `${slug}-${Date.now().toString().slice(-4)}`;
-        }
+        const existing = await query(`SELECT id FROM public.projects WHERE slug = $1 LIMIT 1`, [slug]);
+        if (existing.rows.length > 0) slug = `${slug}-${Date.now()}`;
 
-        let imageFilename = null;
-        if (req.file) {
-            imageFilename = await uploadAndOptimizeMedia(req.file, 'projects');
-        }
-
-        let imagesJson = null;
-        if (body.images) {
-            imagesJson = typeof body.images === 'string' ? JSON.parse(body.images) : body.images;
+        const imagePath = cleanStoragePath(body.image);
+        let galleryImages = body.images;
+        if (typeof galleryImages === 'string') {
+            try { galleryImages = JSON.parse(galleryImages); } catch { galleryImages = []; }
         }
 
         const insertSql = `
             INSERT INTO public.projects (
-                slug, title, location, project_type, image, images,
-                description, status, "order", seo_title, seo_keyword, seo_description,
+                slug, user_id, title, location, project_type,
+                image, images, description, status, "order",
+                seo_title, seo_keyword, seo_description,
                 created_at, updated_at
             ) VALUES (
-                $1, $2, $3, $4, $5, $6,
-                $7, $8, $9, $10, $11, $12,
+                $1, $2, $3, $4, $5,
+                $6, $7, $8, $9, $10,
+                $11, $12, $13,
                 NOW(), NOW()
             ) RETURNING *;
         `;
 
-        const values = [
+        const { rows } = await query(insertSql, [
             slug,
+            req.user?.id ? parseInt(req.user.id, 10) : 1,
             body.title.trim(),
             body.location || null,
             body.project_type || null,
-            imageFilename,
-            imagesJson ? JSON.stringify(imagesJson) : null,
+            imagePath,
+            galleryImages ? JSON.stringify(galleryImages) : null,
             body.description || null,
-            body.status !== undefined ? parseInt(body.status) : 1,
-            body.order !== undefined && body.order !== '' ? parseInt(body.order) : 0,
+            body.status !== undefined ? parseInt(body.status, 10) : 1,
+            body.order !== undefined ? parseInt(body.order, 10) : 0,
             body.seo_title || null,
             body.seo_keyword || null,
             body.seo_description || null
-        ];
+        ]);
 
-        const { rows } = await query(insertSql, values);
-        return res.status(201).json({
-            result: 'success',
-            message: 'Project created successfully',
-            project: rows[0]
-        });
+        return res.status(201).json({ result: 'success', project: rows[0] });
     } catch (err) {
         next(err);
     }
@@ -157,55 +140,40 @@ export async function updateProject(req, res, next) {
         const { id } = req.params;
         const body = req.body || {};
 
-        const { rows: existing } = await query(
-            `SELECT * FROM public.projects WHERE id = $1 LIMIT 1`,
-            [id]
-        );
-        if (existing.length === 0) {
-            return res.status(404).json({ result: 'error', message: 'Project not found' });
-        }
-        const current = existing[0];
+        const { rows: existing } = await query(`SELECT * FROM public.projects WHERE id = $1 LIMIT 1`, [id]);
+        if (existing.length === 0) return res.status(404).json({ result: 'error', message: 'Project not found' });
+        const prev = existing[0];
 
-        let imageFilename = current.image;
-        if (req.file) {
-            imageFilename = await uploadAndOptimizeMedia(req.file, 'projects');
-            if (current.image) {
-                try {
-                    await supabase.storage.from(BUCKET_NAME).remove([`projects/${current.image}`]);
-                } catch (e) {
-                    // ignore
-                }
+        let imagePath = prev.image;
+        if (body.image !== undefined) {
+            imagePath = cleanStoragePath(body.image);
+            if (prev.image && imagePath !== prev.image) {
+                removeStorageFiles(prev.image).catch(() => {});
             }
         }
 
-        let slug = current.slug;
-        if (body.slug && body.slug.trim() !== '') {
-            const desiredSlug = slugify(body.slug);
-            if (desiredSlug !== current.slug) {
-                const { rows: check } = await query(
-                    `SELECT id FROM public.projects WHERE slug = $1 AND id != $2 LIMIT 1`,
-                    [desiredSlug, id]
-                );
-                slug = check.length > 0 ? `${desiredSlug}-${Date.now().toString().slice(-4)}` : desiredSlug;
-            }
+        let slug = body.slug !== undefined ? slugify(body.slug) : prev.slug;
+        if (slug !== prev.slug) {
+            const slugCheck = await query(`SELECT id FROM public.projects WHERE slug = $1 AND id != $2 LIMIT 1`, [slug, id]);
+            if (slugCheck.rows.length > 0) slug = `${slug}-${Date.now()}`;
         }
 
-        let imagesJson = current.images;
-        if (body.images !== undefined) {
-            imagesJson = typeof body.images === 'string' ? JSON.parse(body.images) : body.images;
+        let galleryImages = body.images !== undefined ? body.images : prev.images;
+        if (typeof galleryImages === 'string') {
+            try { galleryImages = JSON.parse(galleryImages); } catch { galleryImages = []; }
         }
 
         const updateSql = `
             UPDATE public.projects SET
-                title = COALESCE($1, title),
+                title = $1,
                 slug = $2,
                 location = $3,
                 project_type = $4,
                 image = $5,
                 images = $6,
                 description = $7,
-                status = COALESCE($8, status),
-                "order" = COALESCE($9, "order"),
+                status = $8,
+                "order" = $9,
                 seo_title = $10,
                 seo_keyword = $11,
                 seo_description = $12,
@@ -214,54 +182,23 @@ export async function updateProject(req, res, next) {
             RETURNING *;
         `;
 
-        const values = [
-            body.title ? body.title.trim() : null,
+        const { rows } = await query(updateSql, [
+            body.title !== undefined ? body.title.trim() : prev.title,
             slug,
-            body.location !== undefined ? body.location : current.location,
-            body.project_type !== undefined ? body.project_type : current.project_type,
-            imageFilename,
-            imagesJson ? JSON.stringify(imagesJson) : null,
-            body.description !== undefined ? body.description : current.description,
-            body.status !== undefined ? parseInt(body.status) : null,
-            body.order !== undefined && body.order !== '' ? parseInt(body.order) : null,
-            body.seo_title !== undefined ? body.seo_title : current.seo_title,
-            body.seo_keyword !== undefined ? body.seo_keyword : current.seo_keyword,
-            body.seo_description !== undefined ? body.seo_description : current.seo_description,
+            body.location !== undefined ? body.location : prev.location,
+            body.project_type !== undefined ? body.project_type : prev.project_type,
+            imagePath,
+            galleryImages ? JSON.stringify(galleryImages) : null,
+            body.description !== undefined ? body.description : prev.description,
+            body.status !== undefined ? parseInt(body.status, 10) : prev.status,
+            body.order !== undefined ? parseInt(body.order, 10) : prev.order,
+            body.seo_title !== undefined ? body.seo_title : prev.seo_title,
+            body.seo_keyword !== undefined ? body.seo_keyword : prev.seo_keyword,
+            body.seo_description !== undefined ? body.seo_description : prev.seo_description,
             id
-        ];
+        ]);
 
-        const { rows } = await query(updateSql, values);
-        return res.json({
-            result: 'success',
-            message: 'Project updated successfully',
-            project: rows[0]
-        });
-    } catch (err) {
-        next(err);
-    }
-}
-
-export async function deleteProject(req, res, next) {
-    try {
-        const { id } = req.params;
-        const { rows } = await query(
-            `DELETE FROM public.projects WHERE id = $1 RETURNING image`,
-            [id]
-        );
-
-        if (rows.length === 0) {
-            return res.status(404).json({ result: 'error', message: 'Project not found' });
-        }
-
-        if (rows[0].image) {
-            try {
-                await supabase.storage.from(BUCKET_NAME).remove([`projects/${rows[0].image}`]);
-            } catch (e) {
-                // ignore
-            }
-        }
-
-        return res.json({ result: 'success', message: 'Project deleted successfully' });
+        return res.json({ result: 'success', project: rows[0] });
     } catch (err) {
         next(err);
     }
@@ -270,22 +207,36 @@ export async function deleteProject(req, res, next) {
 export async function toggleProjectStatus(req, res, next) {
     try {
         const { id } = req.params;
-        const { rows } = await query(
-            `UPDATE public.projects SET status = CASE WHEN status = 1 THEN 0 ELSE 1 END, updated_at = NOW() WHERE id = $1 RETURNING id, status`,
-            [id]
-        );
+        const { rows } = await query(`SELECT id, status FROM public.projects WHERE id = $1 LIMIT 1`, [id]);
+        if (rows.length === 0) return res.status(404).json({ result: 'error', message: 'Project not found' });
 
-        if (rows.length === 0) {
-            return res.status(404).json({ result: 'error', message: 'Project not found' });
-        }
-
-        return res.json({
-            result: 'success',
-            message: `Project ${rows[0].status === 1 ? 'activated' : 'deactivated'}`,
-            status: rows[0].status
-        });
+        const newStatus = rows[0].status === 1 ? 0 : 1;
+        await query(`UPDATE public.projects SET status = $1, updated_at = NOW() WHERE id = $2`, [newStatus, id]);
+        return res.json({ result: 'success', status: newStatus });
     } catch (err) {
         next(err);
     }
 }
 
+export async function deleteProject(req, res, next) {
+    try {
+        const { id } = req.params;
+        const { rows } = await query(`SELECT image, images FROM public.projects WHERE id = $1 LIMIT 1`, [id]);
+        if (rows.length === 0) return res.status(404).json({ result: 'error', message: 'Project not found' });
+
+        const p = rows[0];
+        const filesToRemove = [p.image];
+        if (p.images) {
+            try {
+                const parsed = typeof p.images === 'string' ? JSON.parse(p.images) : p.images;
+                if (Array.isArray(parsed)) filesToRemove.push(...parsed);
+            } catch {}
+        }
+        await removeStorageFiles(filesToRemove);
+
+        await query(`DELETE FROM public.projects WHERE id = $1`, [id]);
+        return res.json({ result: 'success', message: 'Project deleted successfully' });
+    } catch (err) {
+        next(err);
+    }
+}

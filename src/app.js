@@ -1,35 +1,26 @@
 import express from 'express';
 import cors from 'cors';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import { config } from './config/env.js';
 import { corsOptions } from './config/cors.js';
 import apiRoutes from './routes/index.js';
 import { errorHandler } from './middleware/errorHandler.js';
-
-import { handleStatusResponse } from './utils/renderStatusPage.js';
+import { healthCheck } from './controllers/health.controller.js';
 import { generateSitemap } from './controllers/sitemap.controller.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const app = express();
 
-// Trust reverse proxy (needed for accurate client IP resolution behind Render / Vercel / Nginx)
+// Trust reverse proxy (needed for accurate client IP resolution behind Vercel / Nginx)
 app.set('trust proxy', 1);
 
 // Middleware - Strict CORS configuration & preflight OPTIONS handling
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// Serve static images if present
-app.use('/frontend/images', express.static(path.join(__dirname, '../public/frontend/images')));
+// JSON & URL-encoded body limits (max 1MB for serverless safety)
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 // Root server health checks
-app.get(['/', '/health', '/ping'], handleStatusResponse);
+app.get(['/', '/health', '/ping'], healthCheck);
 
 // Root sitemap.xml endpoint (search engines)
 app.get(['/sitemap.xml', '/sitemap'], generateSitemap);

@@ -1,7 +1,6 @@
-import { uploadAndOptimizeMedia } from '../helpers/mediaOptimizer.js';
 import { query } from '../config/db.js';
-import { supabase, BUCKET_NAME } from '../config/supabase.js';
 import { getImageUrl } from '../helpers/serializers.js';
+import { removeStorageFiles, cleanStoragePath } from '../helpers/storage.js';
 
 function slugify(text) {
     return text
@@ -25,7 +24,7 @@ export async function listApplications(req, res, next) {
         }
 
         if (status !== undefined && status !== 'all') {
-            params.push(parseInt(status));
+            params.push(parseInt(status, 10));
             sql += ` AND status = $${params.length}`;
         }
 
@@ -42,6 +41,9 @@ export async function listApplications(req, res, next) {
             description: a.description,
             order: a.order ?? 0,
             status: a.status ?? 1,
+            seo_title: a.seo_title,
+            seo_keyword: a.seo_keyword,
+            seo_description: a.seo_description,
             created_at: a.created_at,
             updated_at: a.updated_at
         }));
@@ -55,16 +57,10 @@ export async function listApplications(req, res, next) {
 export async function getApplication(req, res, next) {
     try {
         const { id } = req.params;
-        const { rows: applications } = await query(
-            `SELECT * FROM public.applications WHERE id = $1 LIMIT 1`,
-            [id]
-        );
+        const { rows } = await query(`SELECT * FROM public.applications WHERE id = $1 LIMIT 1`, [id]);
+        if (rows.length === 0) return res.status(404).json({ result: 'error', message: 'Application not found' });
 
-        if (applications.length === 0) {
-            return res.status(404).json({ result: 'error', message: 'Application not found' });
-        }
-
-        const a = applications[0];
+        const a = rows[0];
         return res.json({
             result: 'success',
             application: {
@@ -85,44 +81,39 @@ export async function createApplication(req, res, next) {
         }
 
         let slug = body.slug ? slugify(body.slug) : slugify(body.title);
-        const { rows: existingSlug } = await query(
-            `SELECT id FROM public.applications WHERE slug = $1 LIMIT 1`,
-            [slug]
-        );
-        if (existingSlug.length > 0) {
-            slug = `${slug}-${Date.now().toString().slice(-4)}`;
-        }
+        const existing = await query(`SELECT id FROM public.applications WHERE slug = $1 LIMIT 1`, [slug]);
+        if (existing.rows.length > 0) slug = `${slug}-${Date.now()}`;
 
-        let imageFilename = null;
-        if (req.file) {
-            imageFilename = await uploadAndOptimizeMedia(req.file, 'applications');
-        }
+        const imagePath = cleanStoragePath(body.image);
 
         const insertSql = `
             INSERT INTO public.applications (
-                slug, title, image, description,
-                status, "order", created_at, updated_at
+                slug, user_id, title, image, description,
+                status, "order",
+                seo_title, seo_keyword, seo_description,
+                created_at, updated_at
             ) VALUES (
-                $1, $2, $3, $4,
-                $5, $6, NOW(), NOW()
+                $1, $2, $3, $4, $5,
+                $6, $7,
+                $8, $9, $10,
+                NOW(), NOW()
             ) RETURNING *;
         `;
 
-        const values = [
+        const { rows } = await query(insertSql, [
             slug,
+            req.user?.id ? parseInt(req.user.id, 10) : 1,
             body.title.trim(),
-            imageFilename,
+            imagePath,
             body.description || null,
-            body.status !== undefined ? parseInt(body.status) : 1,
-            body.order !== undefined && body.order !== '' ? parseInt(body.order) : 0
-        ];
+            body.status !== undefined ? parseInt(body.status, 10) : 1,
+            body.order !== undefined ? parseInt(body.order, 10) : 0,
+            body.seo_title || null,
+            body.seo_keyword || null,
+            body.seo_description || null
+        ]);
 
-        const { rows } = await query(insertSql, values);
-        return res.status(201).json({
-            result: 'success',
-            message: 'Application created successfully',
-            application: rows[0]
-        });
+        return res.status(201).json({ result: 'success', application: rows[0] });
     } catch (err) {
         next(err);
     }
@@ -133,94 +124,54 @@ export async function updateApplication(req, res, next) {
         const { id } = req.params;
         const body = req.body || {};
 
-        const { rows: existing } = await query(
-            `SELECT * FROM public.applications WHERE id = $1 LIMIT 1`,
-            [id]
-        );
-        if (existing.length === 0) {
-            return res.status(404).json({ result: 'error', message: 'Application not found' });
-        }
-        const current = existing[0];
+        const { rows: existing } = await query(`SELECT * FROM public.applications WHERE id = $1 LIMIT 1`, [id]);
+        if (existing.length === 0) return res.status(404).json({ result: 'error', message: 'Application not found' });
+        const prev = existing[0];
 
-        let imageFilename = current.image;
-        if (req.file) {
-            imageFilename = await uploadAndOptimizeMedia(req.file, 'applications');
-            if (current.image) {
-                try {
-                    await supabase.storage.from(BUCKET_NAME).remove([`applications/${current.image}`]);
-                } catch (e) {
-                    // ignore
-                }
+        let imagePath = prev.image;
+        if (body.image !== undefined) {
+            imagePath = cleanStoragePath(body.image);
+            if (prev.image && imagePath !== prev.image) {
+                removeStorageFiles(prev.image).catch(() => {});
             }
         }
 
-        let slug = current.slug;
-        if (body.slug && body.slug.trim() !== '') {
-            const desiredSlug = slugify(body.slug);
-            if (desiredSlug !== current.slug) {
-                const { rows: check } = await query(
-                    `SELECT id FROM public.applications WHERE slug = $1 AND id != $2 LIMIT 1`,
-                    [desiredSlug, id]
-                );
-                slug = check.length > 0 ? `${desiredSlug}-${Date.now().toString().slice(-4)}` : desiredSlug;
-            }
+        let slug = body.slug !== undefined ? slugify(body.slug) : prev.slug;
+        if (slug !== prev.slug) {
+            const slugCheck = await query(`SELECT id FROM public.applications WHERE slug = $1 AND id != $2 LIMIT 1`, [slug, id]);
+            if (slugCheck.rows.length > 0) slug = `${slug}-${Date.now()}`;
         }
 
         const updateSql = `
             UPDATE public.applications SET
-                title = COALESCE($1, title),
+                title = $1,
                 slug = $2,
                 image = $3,
                 description = $4,
-                status = COALESCE($5, status),
-                "order" = COALESCE($6, "order"),
+                status = $5,
+                "order" = $6,
+                seo_title = $7,
+                seo_keyword = $8,
+                seo_description = $9,
                 updated_at = NOW()
-            WHERE id = $7
+            WHERE id = $10
             RETURNING *;
         `;
 
-        const values = [
-            body.title ? body.title.trim() : null,
+        const { rows } = await query(updateSql, [
+            body.title !== undefined ? body.title.trim() : prev.title,
             slug,
-            imageFilename,
-            body.description !== undefined ? body.description : current.description,
-            body.status !== undefined ? parseInt(body.status) : null,
-            body.order !== undefined && body.order !== '' ? parseInt(body.order) : null,
+            imagePath,
+            body.description !== undefined ? body.description : prev.description,
+            body.status !== undefined ? parseInt(body.status, 10) : prev.status,
+            body.order !== undefined ? parseInt(body.order, 10) : prev.order,
+            body.seo_title !== undefined ? body.seo_title : prev.seo_title,
+            body.seo_keyword !== undefined ? body.seo_keyword : prev.seo_keyword,
+            body.seo_description !== undefined ? body.seo_description : prev.seo_description,
             id
-        ];
+        ]);
 
-        const { rows } = await query(updateSql, values);
-        return res.json({
-            result: 'success',
-            message: 'Application updated successfully',
-            application: rows[0]
-        });
-    } catch (err) {
-        next(err);
-    }
-}
-
-export async function deleteApplication(req, res, next) {
-    try {
-        const { id } = req.params;
-        const { rows } = await query(
-            `DELETE FROM public.applications WHERE id = $1 RETURNING image`,
-            [id]
-        );
-
-        if (rows.length === 0) {
-            return res.status(404).json({ result: 'error', message: 'Application not found' });
-        }
-
-        if (rows[0].image) {
-            try {
-                await supabase.storage.from(BUCKET_NAME).remove([`applications/${rows[0].image}`]);
-            } catch (e) {
-                // ignore
-            }
-        }
-
-        return res.json({ result: 'success', message: 'Application deleted successfully' });
+        return res.json({ result: 'success', application: rows[0] });
     } catch (err) {
         next(err);
     }
@@ -229,22 +180,30 @@ export async function deleteApplication(req, res, next) {
 export async function toggleApplicationStatus(req, res, next) {
     try {
         const { id } = req.params;
-        const { rows } = await query(
-            `UPDATE public.applications SET status = CASE WHEN status = 1 THEN 0 ELSE 1 END, updated_at = NOW() WHERE id = $1 RETURNING id, status`,
-            [id]
-        );
+        const { rows } = await query(`SELECT id, status FROM public.applications WHERE id = $1 LIMIT 1`, [id]);
+        if (rows.length === 0) return res.status(404).json({ result: 'error', message: 'Application not found' });
 
-        if (rows.length === 0) {
-            return res.status(404).json({ result: 'error', message: 'Application not found' });
-        }
-
-        return res.json({
-            result: 'success',
-            message: `Application ${rows[0].status === 1 ? 'activated' : 'deactivated'}`,
-            status: rows[0].status
-        });
+        const newStatus = rows[0].status === 1 ? 0 : 1;
+        await query(`UPDATE public.applications SET status = $1, updated_at = NOW() WHERE id = $2`, [newStatus, id]);
+        return res.json({ result: 'success', status: newStatus });
     } catch (err) {
         next(err);
     }
 }
 
+export async function deleteApplication(req, res, next) {
+    try {
+        const { id } = req.params;
+        const { rows } = await query(`SELECT image FROM public.applications WHERE id = $1 LIMIT 1`, [id]);
+        if (rows.length === 0) return res.status(404).json({ result: 'error', message: 'Application not found' });
+
+        if (rows[0].image) {
+            await removeStorageFiles(rows[0].image);
+        }
+
+        await query(`DELETE FROM public.applications WHERE id = $1`, [id]);
+        return res.json({ result: 'success', message: 'Application deleted successfully' });
+    } catch (err) {
+        next(err);
+    }
+}

@@ -1,25 +1,24 @@
 import { Router } from 'express';
-import { adminAuth } from '../middleware/adminAuth.js';
-import { uploadSingle } from '../middleware/upload.js';
+import { adminAuth, authorizeRoles } from '../middleware/adminAuth.js';
 import {
     listDownloads,
     getDownload,
     createDownload,
     updateDownload,
-    deleteDownload,
-    toggleDownloadStatus
+    toggleDownloadStatus,
+    deleteDownload
 } from '../controllers/adminDownload.controller.js';
 
 const router = Router();
 
 router.use(adminAuth);
+router.use(authorizeRoles('super admin', 'admin', 'editor'));
 
 router.get('/', listDownloads);
 router.get('/:id', getDownload);
-router.post('/', uploadSingle('file'), createDownload);
-router.put('/:id', uploadSingle('file'), updateDownload);
+router.post('/', createDownload);
+router.put('/:id', updateDownload);
+router.patch('/:id/status', toggleDownloadStatus);
 router.delete('/:id', deleteDownload);
-router.patch('/:id/toggle-status', toggleDownloadStatus);
 
 export default router;
-

@@ -1,25 +1,24 @@
 import { Router } from 'express';
-import { adminAuth } from '../middleware/adminAuth.js';
-import { uploadSingle } from '../middleware/upload.js';
+import { adminAuth, authorizeRoles } from '../middleware/adminAuth.js';
 import {
     listApplications,
     getApplication,
     createApplication,
     updateApplication,
-    deleteApplication,
-    toggleApplicationStatus
+    toggleApplicationStatus,
+    deleteApplication
 } from '../controllers/adminApplication.controller.js';
 
 const router = Router();
 
 router.use(adminAuth);
+router.use(authorizeRoles('super admin', 'admin', 'editor'));
 
 router.get('/', listApplications);
 router.get('/:id', getApplication);
-router.post('/', uploadSingle('image'), createApplication);
-router.put('/:id', uploadSingle('image'), updateApplication);
+router.post('/', createApplication);
+router.put('/:id', updateApplication);
+router.patch('/:id/status', toggleApplicationStatus);
 router.delete('/:id', deleteApplication);
-router.patch('/:id/toggle-status', toggleApplicationStatus);
 
 export default router;
-

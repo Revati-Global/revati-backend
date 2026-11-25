@@ -12,11 +12,11 @@ Usage:
 Options:
   --name <name>          Admin full name (or via ADMIN_NAME env)
   --email <email>        Admin email address (or via ADMIN_EMAIL env)
-  --password <password>  Admin password (or via ADMIN_PASSWORD env, min 8 chars)
   --help, -h             Show this help message
 
-If flags or env vars are omitted, the script will prompt interactively for input.
-Masks password on interactive input.
+Password Input:
+  For security, password cannot be passed as a CLI argument.
+  Pass via ADMIN_PASSWORD environment variable, or enter it interactively at the masked prompt.
 `);
 }
 
@@ -30,30 +30,42 @@ function ask(question, isPassword = false) {
     if (isPassword) {
       process.stdout.write(question);
       let pass = '';
-      process.stdin.setRawMode?.(true);
+      if (process.stdin.setRawMode) {
+        process.stdin.setRawMode(true);
+      }
       process.stdin.resume();
-      process.stdin.on('data', function handler(char) {
-        char = char + '';
+      const onData = function (chunk) {
+        const char = chunk.toString();
         switch (char) {
           case '\n':
           case '\r':
           case '\u0004':
-            process.stdin.setRawMode?.(false);
+            if (process.stdin.setRawMode) {
+              process.stdin.setRawMode(false);
+            }
             process.stdin.pause();
-            process.stdin.removeListener('data', handler);
+            process.stdin.removeListener('data', onData);
             process.stdout.write('\n');
             rl.close();
             resolve(pass);
             break;
-          case '\u0003':
+          case '\u0003': // Ctrl+C
             process.exit(1);
+            break;
+          case '\u007F': // Backspace
+          case '\b':
+            if (pass.length > 0) {
+              pass = pass.slice(0, -1);
+              process.stdout.write('\b \b');
+            }
             break;
           default:
             pass += char;
             process.stdout.write('*');
             break;
         }
-      });
+      };
+      process.stdin.on('data', onData);
     } else {
       rl.question(question, (answer) => {
         rl.close();
@@ -71,6 +83,11 @@ function parseCliArgs() {
       parsed.help = true;
     } else if (args[i].startsWith('--')) {
       const key = args[i].replace(/^--/, '');
+      if (key === 'password') {
+        console.error('Security Warning: Passing --password on CLI is disabled to prevent shell history leaks.');
+        console.error('Please enter the password at the masked prompt or set ADMIN_PASSWORD environment variable.');
+        process.exit(1);
+      }
       const value = args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : true;
       parsed[key] = value;
     }
@@ -90,7 +107,7 @@ async function createAdmin() {
 
   const name = cliArgs.name || process.env.ADMIN_NAME || (await ask('Admin Full Name: '));
   const email = cliArgs.email || process.env.ADMIN_EMAIL || (await ask('Admin Email: '));
-  const password = cliArgs.password || process.env.ADMIN_PASSWORD || (await ask('Admin Password: ', true));
+  const password = process.env.ADMIN_PASSWORD || (await ask('Admin Password (min 8 chars): ', true));
 
   if (!name || !email || !password) {
     console.error('Error: Name, email, and password are required.');

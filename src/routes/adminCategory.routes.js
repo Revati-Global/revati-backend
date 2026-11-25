@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { adminAuth, authorizeRoles } from '../middleware/adminAuth.js';
 import {
     listCategories,
     getCategory,
@@ -7,18 +8,16 @@ import {
     toggleCategoryStatus,
     deleteCategory
 } from '../controllers/adminCategory.controller.js';
-import { adminAuthMiddleware } from '../middleware/adminAuth.js';
-import { upload } from '../middleware/upload.js';
 
 const router = Router();
 
-// Protect all admin category operations with JWT Bearer auth
-router.use(adminAuthMiddleware);
+router.use(adminAuth);
+router.use(authorizeRoles('super admin', 'admin', 'editor'));
 
 router.get('/', listCategories);
 router.get('/:id', getCategory);
-router.post('/', upload.single('image'), createCategory);
-router.put('/:id', upload.single('image'), updateCategory);
+router.post('/', createCategory);
+router.put('/:id', updateCategory);
 router.patch('/:id/status', toggleCategoryStatus);
 router.delete('/:id', deleteCategory);
 

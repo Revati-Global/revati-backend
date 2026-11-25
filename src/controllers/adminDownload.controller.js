@@ -1,7 +1,6 @@
-import { uploadAndOptimizeMedia } from '../helpers/mediaOptimizer.js';
 import { query } from '../config/db.js';
-import { supabase, BUCKET_NAME } from '../config/supabase.js';
 import { getImageUrl, getPdfUrl } from '../helpers/serializers.js';
+import { removeStorageFiles, cleanStoragePath } from '../helpers/storage.js';
 
 function slugify(text) {
     return text
@@ -15,18 +14,13 @@ function slugify(text) {
 
 export async function listDownloads(req, res, next) {
     try {
-        const { search, status, type, category } = req.query;
+        const { search, type, status } = req.query;
         let sql = `SELECT * FROM public.downloads WHERE 1=1`;
         const params = [];
 
         if (search && search.trim() !== '') {
             params.push(`%${search.trim()}%`);
-            sql += ` AND (title ILIKE $${params.length} OR slug ILIKE $${params.length})`;
-        }
-
-        if (status !== undefined && status !== 'all') {
-            params.push(parseInt(status));
-            sql += ` AND status = $${params.length}`;
+            sql += ` AND (title ILIKE $${params.length} OR slug ILIKE $${params.length} OR category ILIKE $${params.length})`;
         }
 
         if (type && type !== 'all') {
@@ -34,9 +28,9 @@ export async function listDownloads(req, res, next) {
             sql += ` AND type = $${params.length}`;
         }
 
-        if (category && category !== 'all') {
-            params.push(category);
-            sql += ` AND category = $${params.length}`;
+        if (status !== undefined && status !== 'all') {
+            params.push(parseInt(status, 10));
+            sql += ` AND status = $${params.length}`;
         }
 
         sql += ` ORDER BY COALESCE("order", 9999) ASC, id DESC`;
@@ -49,10 +43,10 @@ export async function listDownloads(req, res, next) {
             title: d.title,
             file: d.file ? getPdfUrl(d.file, 'downloads') : null,
             raw_file: d.file,
-            image: d.image ? getImageUrl(d.image, 'downloads') : null,
-            raw_image: d.image,
             type: d.type || 'brochure',
             category: d.category,
+            image: d.image ? getImageUrl(d.image, 'downloads') : null,
+            raw_image: d.image,
             order: d.order ?? 0,
             status: d.status ?? 1,
             created_at: d.created_at,
@@ -69,10 +63,7 @@ export async function getDownload(req, res, next) {
     try {
         const { id } = req.params;
         const { rows } = await query(`SELECT * FROM public.downloads WHERE id = $1 LIMIT 1`, [id]);
-
-        if (rows.length === 0) {
-            return res.status(404).json({ result: 'error', message: 'Download item not found' });
-        }
+        if (rows.length === 0) return res.status(404).json({ result: 'error', message: 'Download not found' });
 
         const d = rows[0];
         return res.json({
@@ -96,48 +87,37 @@ export async function createDownload(req, res, next) {
         }
 
         let slug = body.slug ? slugify(body.slug) : slugify(body.title);
-        const { rows: existingSlug } = await query(
-            `SELECT id FROM public.downloads WHERE slug = $1 LIMIT 1`,
-            [slug]
-        );
-        if (existingSlug.length > 0) {
-            slug = `${slug}-${Date.now().toString().slice(-4)}`;
-        }
+        const existing = await query(`SELECT id FROM public.downloads WHERE slug = $1 LIMIT 1`, [slug]);
+        if (existing.rows.length > 0) slug = `${slug}-${Date.now()}`;
 
-        let fileFilename = null;
-        if (req.file) {
-            fileFilename = await uploadAndOptimizeMedia(req.file, 'downloads');
-        } else if (body.file) {
-            fileFilename = body.file;
-        }
+        const filePath = cleanStoragePath(body.file);
+        const imagePath = cleanStoragePath(body.image);
 
         const insertSql = `
             INSERT INTO public.downloads (
-                slug, title, file, type, category, image,
-                status, "order", created_at, updated_at
+                slug, user_id, title, file, type, category,
+                image, status, "order",
+                created_at, updated_at
             ) VALUES (
                 $1, $2, $3, $4, $5, $6,
-                $7, $8, NOW(), NOW()
+                $7, $8, $9,
+                NOW(), NOW()
             ) RETURNING *;
         `;
 
-        const values = [
+        const { rows } = await query(insertSql, [
             slug,
+            req.user?.id ? parseInt(req.user.id, 10) : 1,
             body.title.trim(),
-            fileFilename,
+            filePath,
             body.type || 'brochure',
             body.category || null,
-            body.image || null,
-            body.status !== undefined ? parseInt(body.status) : 1,
-            body.order !== undefined && body.order !== '' ? parseInt(body.order) : 0
-        ];
+            imagePath,
+            body.status !== undefined ? parseInt(body.status, 10) : 1,
+            body.order !== undefined ? parseInt(body.order, 10) : 0
+        ]);
 
-        const { rows } = await query(insertSql, values);
-        return res.status(201).json({
-            result: 'success',
-            message: 'Download created successfully',
-            download: rows[0]
-        });
+        return res.status(201).json({ result: 'success', download: rows[0] });
     } catch (err) {
         next(err);
     }
@@ -149,95 +129,59 @@ export async function updateDownload(req, res, next) {
         const body = req.body || {};
 
         const { rows: existing } = await query(`SELECT * FROM public.downloads WHERE id = $1 LIMIT 1`, [id]);
-        if (existing.length === 0) {
-            return res.status(404).json({ result: 'error', message: 'Download item not found' });
-        }
-        const current = existing[0];
+        if (existing.length === 0) return res.status(404).json({ result: 'error', message: 'Download not found' });
+        const prev = existing[0];
 
-        let fileFilename = current.file;
-        if (req.file) {
-            fileFilename = await uploadAndOptimizeMedia(req.file, 'downloads');
-            if (current.file) {
-                try {
-                    await supabase.storage.from(BUCKET_NAME).remove([`downloads/${current.file}`]);
-                } catch (e) {
-                    // ignore
-                }
+        let filePath = prev.file;
+        if (body.file !== undefined) {
+            filePath = cleanStoragePath(body.file);
+            if (prev.file && filePath !== prev.file) {
+                removeStorageFiles(prev.file).catch(() => {});
             }
         }
 
-        let slug = current.slug;
-        if (body.slug && body.slug.trim() !== '') {
-            const desiredSlug = slugify(body.slug);
-            if (desiredSlug !== current.slug) {
-                const { rows: check } = await query(
-                    `SELECT id FROM public.downloads WHERE slug = $1 AND id != $2 LIMIT 1`,
-                    [desiredSlug, id]
-                );
-                slug = check.length > 0 ? `${desiredSlug}-${Date.now().toString().slice(-4)}` : desiredSlug;
+        let imagePath = prev.image;
+        if (body.image !== undefined) {
+            imagePath = cleanStoragePath(body.image);
+            if (prev.image && imagePath !== prev.image) {
+                removeStorageFiles(prev.image).catch(() => {});
             }
+        }
+
+        let slug = body.slug !== undefined ? slugify(body.slug) : prev.slug;
+        if (slug !== prev.slug) {
+            const slugCheck = await query(`SELECT id FROM public.downloads WHERE slug = $1 AND id != $2 LIMIT 1`, [slug, id]);
+            if (slugCheck.rows.length > 0) slug = `${slug}-${Date.now()}`;
         }
 
         const updateSql = `
             UPDATE public.downloads SET
-                title = COALESCE($1, title),
+                title = $1,
                 slug = $2,
                 file = $3,
-                type = COALESCE($4, type),
-                category = COALESCE($5, category),
-                image = COALESCE($6, image),
-                status = COALESCE($7, status),
-                "order" = COALESCE($8, "order"),
+                type = $4,
+                category = $5,
+                image = $6,
+                status = $7,
+                "order" = $8,
                 updated_at = NOW()
             WHERE id = $9
             RETURNING *;
         `;
 
-        const values = [
-            body.title ? body.title.trim() : null,
+        const { rows } = await query(updateSql, [
+            body.title !== undefined ? body.title.trim() : prev.title,
             slug,
-            fileFilename,
-            body.type || null,
-            body.category || null,
-            body.image || null,
-            body.status !== undefined ? parseInt(body.status) : null,
-            body.order !== undefined && body.order !== '' ? parseInt(body.order) : null,
+            filePath,
+            body.type !== undefined ? body.type : prev.type,
+            body.category !== undefined ? body.category : prev.category,
+            imagePath,
+            body.status !== undefined ? parseInt(body.status, 10) : prev.status,
+            body.order !== undefined ? parseInt(body.order, 10) : prev.order,
             id
-        ];
+        ]);
 
-        const { rows } = await query(updateSql, values);
-        return res.json({
-            result: 'success',
-            message: 'Download updated successfully',
-            download: rows[0]
-        });
-    } catch (err) {
-        next(err);
-    }
-}
-
-export async function deleteDownload(req, res, next) {
-    try {
-        const { id } = req.params;
-        const { rows } = await query(`DELETE FROM public.downloads WHERE id = $1 RETURNING file, image`, [id]);
-
-        if (rows.length === 0) {
-            return res.status(404).json({ result: 'error', message: 'Download item not found' });
-        }
-
-        const filesToDelete = [];
-        if (rows[0].file) filesToDelete.push(`downloads/${rows[0].file}`);
-        if (rows[0].image) filesToDelete.push(`downloads/${rows[0].image}`);
-
-        if (filesToDelete.length > 0) {
-            try {
-                await supabase.storage.from(BUCKET_NAME).remove(filesToDelete);
-            } catch (e) {
-                // ignore
-            }
-        }
-
-        return res.json({ result: 'success', message: 'Download deleted successfully' });
+        return res.json({ result: 'success', download: rows[0] });
     } catch (err) {
         next(err);
     }
@@ -246,22 +190,31 @@ export async function deleteDownload(req, res, next) {
 export async function toggleDownloadStatus(req, res, next) {
     try {
         const { id } = req.params;
-        const { rows } = await query(
-            `UPDATE public.downloads SET status = CASE WHEN status = 1 THEN 0 ELSE 1 END, updated_at = NOW() WHERE id = $1 RETURNING id, status`,
-            [id]
-        );
+        const { rows } = await query(`SELECT id, status FROM public.downloads WHERE id = $1 LIMIT 1`, [id]);
+        if (rows.length === 0) return res.status(404).json({ result: 'error', message: 'Download not found' });
 
-        if (rows.length === 0) {
-            return res.status(404).json({ result: 'error', message: 'Download item not found' });
-        }
-
-        return res.json({
-            result: 'success',
-            message: `Download ${rows[0].status === 1 ? 'activated' : 'deactivated'}`,
-            status: rows[0].status
-        });
+        const newStatus = rows[0].status === 1 ? 0 : 1;
+        await query(`UPDATE public.downloads SET status = $1, updated_at = NOW() WHERE id = $2`, [newStatus, id]);
+        return res.json({ result: 'success', status: newStatus });
     } catch (err) {
         next(err);
     }
 }
 
+export async function deleteDownload(req, res, next) {
+    try {
+        const { id } = req.params;
+        const { rows } = await query(`SELECT file, image FROM public.downloads WHERE id = $1 LIMIT 1`, [id]);
+        if (rows.length === 0) return res.status(404).json({ result: 'error', message: 'Download not found' });
+
+        const filesToRemove = [rows[0].file, rows[0].image].filter(Boolean);
+        if (filesToRemove.length > 0) {
+            await removeStorageFiles(filesToRemove);
+        }
+
+        await query(`DELETE FROM public.downloads WHERE id = $1`, [id]);
+        return res.json({ result: 'success', message: 'Download deleted successfully' });
+    } catch (err) {
+        next(err);
+    }
+}

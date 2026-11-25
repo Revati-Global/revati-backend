@@ -1,20 +1,21 @@
 import { query } from '../config/db.js';
+import { removeStorageFiles, cleanStoragePath } from '../helpers/storage.js';
 
 export async function listSettings(req, res, next) {
     try {
-        const { group } = req.query;
-        let sql = `SELECT * FROM public.settings`;
-        const params = [];
-
-        if (group && group !== 'all') {
-            params.push(group.trim());
-            sql += ` WHERE "group" = $1`;
+        const { rows } = await query(`SELECT * FROM public.settings ORDER BY "group" ASC, "key" ASC`);
+        
+        // Return both array and key-value map for convenience
+        const settingsMap = {};
+        for (const row of rows) {
+            settingsMap[row.key] = row.value;
         }
 
-        sql += ` ORDER BY id ASC`;
-
-        const { rows: settings } = await query(sql, params);
-        return res.json({ result: 'success', settings });
+        return res.json({
+            result: 'success',
+            settings: rows,
+            settingsMap
+        });
     } catch (err) {
         next(err);
     }
@@ -22,24 +23,40 @@ export async function listSettings(req, res, next) {
 
 export async function updateSettings(req, res, next) {
     try {
-        const body = req.body || {};
-        const entries = Object.entries(body);
+        const { settings } = req.body || {};
 
-        if (entries.length === 0) {
-            return res.status(400).json({ result: 'error', message: 'No settings provided to update' });
+        if (!settings || typeof settings !== 'object') {
+            return res.status(400).json({
+                result: 'error',
+                message: 'Settings object is required { [key: string]: value }'
+            });
         }
 
-        for (const [key, val] of entries) {
+        // Check if logo is being updated
+        if (settings.logo) {
+            const { rows: oldLogo } = await query(`SELECT value FROM public.settings WHERE key = 'logo' LIMIT 1`);
+            const prevLogo = oldLogo[0]?.value;
+            const newLogo = cleanStoragePath(settings.logo);
+            if (prevLogo && newLogo && prevLogo !== newLogo) {
+                removeStorageFiles(prevLogo).catch(() => {});
+            }
+            settings.logo = newLogo;
+        }
+
+        for (const [key, val] of Object.entries(settings)) {
+            const valueStr = val !== null && val !== undefined ? String(val) : '';
             await query(
                 `INSERT INTO public.settings ("key", "value", "updated_at")
                  VALUES ($1, $2, NOW())
                  ON CONFLICT ("key") DO UPDATE
-                   SET "value" = EXCLUDED."value", "updated_at" = NOW()`,
-                [key, val !== null && val !== undefined ? String(val) : '']
+                   SET "value" = EXCLUDED."value",
+                       "updated_at" = NOW();`,
+                [key, valueStr]
             );
         }
 
-        const { rows: updated } = await query(`SELECT * FROM public.settings ORDER BY id ASC`);
+        const { rows: updated } = await query(`SELECT * FROM public.settings ORDER BY "group" ASC, "key" ASC`);
+
         return res.json({
             result: 'success',
             message: 'Settings updated successfully',
@@ -49,4 +66,3 @@ export async function updateSettings(req, res, next) {
         next(err);
     }
 }
-

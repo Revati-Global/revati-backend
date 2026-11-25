@@ -1,25 +1,24 @@
 import { Router } from 'express';
-import { adminAuth } from '../middleware/adminAuth.js';
-import { uploadSingle } from '../middleware/upload.js';
+import { adminAuth, authorizeRoles } from '../middleware/adminAuth.js';
 import {
     listSolutions,
     getSolution,
     createSolution,
     updateSolution,
-    deleteSolution,
-    toggleSolutionStatus
+    toggleSolutionStatus,
+    deleteSolution
 } from '../controllers/adminSolution.controller.js';
 
 const router = Router();
 
 router.use(adminAuth);
+router.use(authorizeRoles('super admin', 'admin', 'editor'));
 
 router.get('/', listSolutions);
 router.get('/:id', getSolution);
-router.post('/', uploadSingle('image'), createSolution);
-router.put('/:id', uploadSingle('image'), updateSolution);
+router.post('/', createSolution);
+router.put('/:id', updateSolution);
+router.patch('/:id/status', toggleSolutionStatus);
 router.delete('/:id', deleteSolution);
-router.patch('/:id/toggle-status', toggleSolutionStatus);
 
 export default router;
-

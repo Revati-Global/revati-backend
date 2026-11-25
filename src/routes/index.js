@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { apiKeyMiddleware } from '../middleware/apiKey.js';
+import { healthCheck } from '../controllers/health.controller.js';
 
 import categoryRoutes from './category.routes.js';
 import productRoutes from './product.routes.js';
@@ -18,6 +19,8 @@ import pageRoutes from './page.routes.js';
 import subscriberRoutes from './subscriber.routes.js';
 
 import adminAuthRoutes from './adminAuth.routes.js';
+import adminUserRoutes from './adminUser.routes.js';
+import adminUploadRoutes from './adminUpload.routes.js';
 import adminCategoryRoutes from './adminCategory.routes.js';
 import adminProductRoutes from './adminProduct.routes.js';
 import adminBlogRoutes from './adminBlog.routes.js';
@@ -33,24 +36,29 @@ import adminPageRoutes from './adminPage.routes.js';
 import adminFaqRoutes from './adminFaq.routes.js';
 import adminSubscriberRoutes from './adminSubscriber.routes.js';
 import adminCleanupRoutes from './adminCleanup.routes.js';
+import cronRoutes from './cron.routes.js';
 import mediaRoutes from './media.routes.js';
-
 import sitemapRoutes from './sitemap.routes.js';
-import { handleStatusResponse } from '../utils/renderStatusPage.js';
 
 const router = Router();
 
 // Health check / root API status endpoint (exempt from api key)
-router.get(['/', '/health', '/ping'], handleStatusResponse);
+router.get(['/', '/health', '/ping'], healthCheck);
+
+// Cron keep-alive endpoint for Supabase Free tier
+router.use('/cron', cronRoutes);
 
 // Public XML Sitemap (exempt from api key for search engine crawlers)
 router.use('/', sitemapRoutes);
 
-// Document & Media streaming proxy (hides Supabase storage URLs)
+// Legacy Media redirect routes (redirects 301 to Supabase Storage public CDN URL)
 router.use('/media', mediaRoutes);
 
-// Admin endpoints (JWT Bearer auth)
+// Admin endpoints (JWT Bearer auth & Role Enforcement)
 router.use('/admin/auth', adminAuthRoutes);
+router.use('/admin/users', adminUserRoutes);
+router.use('/admin/uploads', adminUploadRoutes);
+router.use('/admin/storage', adminUploadRoutes);
 router.use('/admin/categories', adminCategoryRoutes);
 router.use('/admin/products', adminProductRoutes);
 router.use('/admin/blogs', adminBlogRoutes);
@@ -67,8 +75,17 @@ router.use('/admin/faqs', adminFaqRoutes);
 router.use('/admin/subscribers', adminSubscriberRoutes);
 router.use('/admin/cleanup', adminCleanupRoutes);
 
+// Cache-control middleware for public GET endpoints (CDN caching)
+const publicCacheControl = (req, res, next) => {
+    if (req.method === 'GET') {
+        res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300');
+    }
+    next();
+};
+
 // Protect public frontend /api routes with ApiKeyMiddleware
 router.use(apiKeyMiddleware);
+router.use(publicCacheControl);
 
 // Feature routes
 router.use('/categories', categoryRoutes);
